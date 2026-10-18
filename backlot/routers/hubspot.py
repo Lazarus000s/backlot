@@ -844,12 +844,14 @@ def _refuse_a_batch_read_shape(
     starts. An object or array in an input's `id` or either properties list is named where it
     starts too. A missing or null `id` is refused at the input's closing brace. A string
     `properties` or `propertiesWithHistory` is echoed trimmed (`_TRIM`), and one that trims to
-    nothing is named by its field alone. A null properties element is refused at the body's
-    closing brace, after other value refusals; a null element of `inputs` is also deferred, in an
-    envelope with no `category`. With a `before` from `_non_standard_number`, a refusal from
+    nothing is named by its field alone. A null element of either properties list, and a null
+    element of `inputs`, are deferred until after the other value refusals. Then `properties`
+    is named first, followed by `propertiesWithHistory`, then a null input, whatever their order
+    in the body (measured 2026-10-18). A properties element is named at the body's closing brace;
+    a null input's envelope has no `category`. With a `before` from `_non_standard_number`, a refusal from
     there on and the deferred null elements are left to the token."""
     null_input = False
-    null_property = None
+    null_properties = set()
     for key, value in body.items():
         if key not in ("inputs", "properties", "propertiesWithHistory") or value is None:
             continue
@@ -894,8 +896,7 @@ def _refuse_a_batch_read_shape(
                 item = item["id"]
                 path += ("id",)
             elif item is None:
-                if null_property is None:
-                    null_property = key
+                null_properties.add(key)
                 continue
             if isinstance(item, (dict, list)):
                 if not _ahead(raw, path, before):
@@ -907,15 +908,18 @@ def _refuse_a_batch_read_shape(
                     f"Cannot deserialize value of type  from {kind} value "
                     f"(token `JsonToken.START_{kind.upper()}`)",
                 )
-    if null_input and before is None:
-        return JSONResponse(
-            status_code=400, content={"status": "error", "message": "Input IDs must be non-null."}
-        )
-    if null_property is not None and before is None:
-        line, column = _closing_at(raw, ())
-        return _error(
-            400, f"Invalid input JSON on line {line}, column {column}: {null_property} element"
-        )
+    if before is None:
+        for key in ("properties", "propertiesWithHistory"):
+            if key in null_properties:
+                line, column = _closing_at(raw, ())
+                return _error(
+                    400, f"Invalid input JSON on line {line}, column {column}: {key} element"
+                )
+        if null_input:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Input IDs must be non-null."},
+            )
     return None
 
 
@@ -1259,8 +1263,8 @@ async def batch_read(object_type: str, request: Request):
         # A string in `inputs` is answered as `{"id": <that string>}` is (measured 2026-10-11).
         rid = item if isinstance(item, str) else item["id"]
         if not isinstance(rid, str):
-            # Numeric and boolean ids retain their JSON spelling in a missing-record error,
-            # including `1e3` and `true`, rather than Python's `1000.0` and `True` (2026-10-11).
+            # A number or boolean id is echoed as the body spells it (`1e3`, `1E3`, `1.0`, `-0.0`,
+            # `true`), measured 2026-10-11 and 2026-10-18; an integer naming a record finds it.
             text, start, end = _token_span(await request.body(), ("inputs", i, "id"))
             rid = text[start:end]
         # One ACL-scoped query, not a resolve followed by a get_document refetch of the same

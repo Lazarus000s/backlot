@@ -1230,6 +1230,17 @@ def _br(id, raw, want, object_type="companies", authed=True):
 
 _ONE = '{"inputs":[{"id":"1"}],'
 _ARRAY = "Cannot deserialize value of type  from Array value (token `JsonToken.START_ARRAY`)"
+_OBJECT = "Cannot deserialize value of type  from Object value (token `JsonToken.START_OBJECT`)"
+
+
+def _no_id(column: int) -> dict:
+    return {
+        "status": "error",
+        "message": f"Invalid input JSON on line 1, column {column}. "
+        "Some required fields were not set: [id]",
+        "category": "VALIDATION_ERROR",
+    }
+
 
 # fmt: off
 _BATCH_BODY_ROWS = [
@@ -1260,6 +1271,16 @@ _BATCH_BODY_ROWS = [
     _br("array-element", '{"inputs":[["1"]]}', _batch_refusal(12, _ARRAY)),
     _br("int-after-a-string", '{"inputs":["1",7]}', _batch_refusal(16, _no_creator("int/Int", "Number value (7)"))),
     _br("int-after-an-object", '{"inputs":[{"id":"1"},7]}', _batch_refusal(23, _no_creator("int/Int", "Number value (7)"))),
+    _br("null-id", '{"inputs":[{"id":null}]}', _no_id(22)),
+    _br("null-id-spaced", '{"inputs":[{"id":null }]}', _no_id(23)),
+    _br("missing-id", '{"inputs":[{}]}', _no_id(13)),
+    _br("null-id-in-the-second-input", '{"inputs":[{"id":"1"},{"id":null}]}', _no_id(33)),
+    _br("object-id", '{"inputs":[{"id":{}}]}', _batch_refusal(18, _OBJECT)),
+    _br("empty-array-id", '{"inputs":[{"id":[]}]}', _batch_refusal(18, _ARRAY)),
+    _br("array-id", '{"inputs":[{"id":["1"]}]}', _batch_refusal(18, _ARRAY)),
+    _br("missing-id-before-an-int", '{"inputs":[{},7]}', _no_id(13)),
+    _br("int-before-a-missing-id", '{"inputs":[7,{}]}', _batch_refusal(12, _no_creator("int/Int", "Number value (7)"))),
+    _br("object-id-before-a-null-id", '{"inputs":[{"id":{}},{"id":null}]}', _batch_refusal(18, _OBJECT)),
     _br("null-element", '{"inputs":[null]}', {"status": "error", "message": "Input IDs must be non-null."}),
     _br("int-after-null", '{"inputs":[null,7]}', _batch_refusal(17, _no_creator("int/Int", "Number value (7)"))),
     _br("properties-after-null", '{"inputs":[null],"properties":"x"}', _batch_refusal(31, _no_creator("String", "String value ('x')"))),
@@ -1272,6 +1293,21 @@ _BATCH_BODY_ROWS = [
     _br("properties-integer", _ONE + '"properties":5}', _batch_refusal(37, _not_a_list("Integer", "VALUE_NUMBER_INT"))),
     _br("properties-object", _ONE + '"properties":{}}', _batch_refusal(37, _not_a_list("Object", "START_OBJECT"))),
     _br("properties-false", _ONE + '"properties":false}', _batch_refusal(37, _not_a_list("Boolean", "VALUE_FALSE"))),
+    # The measurements cited in _refuse_a_batch_read_shape, using id "1".
+    _br("properties-null-element", _ONE + '"properties":[null]}', _batch_refusal(43, "properties element")),
+    _br("properties-null-element-then-spaces", _ONE + '"properties":[null]}   ', _batch_refusal(43, "properties element")),
+    _br("properties-null-between-strings", _ONE + '"properties":["email",null,"firstname"]}', _batch_refusal(63, "properties element")),
+    _br("properties-object-element", _ONE + '"properties":[{}]}', _batch_refusal(38, _OBJECT)),
+    _br("properties-array-element", _ONE + '"properties":[[]]}', _batch_refusal(38, _ARRAY)),
+    _br("properties-null-before-an-object", _ONE + '"properties":[null,{}]}', _batch_refusal(43, _OBJECT)),
+    _br("with-history-null-element", _ONE + '"propertiesWithHistory":[null]}', _batch_refusal(54, "propertiesWithHistory element")),
+    _br("with-history-object-element", _ONE + '"propertiesWithHistory":[{}]}', _batch_refusal(49, _OBJECT)),
+    _br("with-history-array-element", _ONE + '"propertiesWithHistory":[[]]}', _batch_refusal(49, _ARRAY)),
+    _br("null-elements-with-history-first", _ONE + '"propertiesWithHistory":[null],"properties":[null]}', _batch_refusal(74, "properties element")),
+    _br("null-property-after-a-null-input", '{"inputs":[null],"properties":[null]}', _batch_refusal(37, "properties element")),
+    _br("null-history-before-a-null-input", '{"propertiesWithHistory":[null],"inputs":[null]}', _batch_refusal(48, "propertiesWithHistory element")),
+    _br("null-property-before-a-string-inputs", '{"properties":[null],"inputs":"x"}', _batch_refusal(31, _not_a_list("String", "VALUE_STRING"))),
+    _br("null-id-before-a-null-property", '{"inputs":[{"id":null}],"properties":[null]}', _no_id(22)),
     _br("with-history-string", _ONE + '"propertiesWithHistory":"name"}', _batch_refusal(48, _no_creator("String", "String value ('name')"))),
     _br("with-history-empty", _ONE + '"propertiesWithHistory":""}', _blank_field("propertiesWithHistory")),
     _br("with-history-float", _ONE + '"propertiesWithHistory":1.5}', _batch_refusal(48, _not_a_list("Floating-point", "VALUE_NUMBER_FLOAT"))),
@@ -1285,6 +1321,9 @@ _BATCH_BODY_ROWS = [
     _br("null-inputs", '{"inputs":null}', 200),
     _br("null-properties", _ONE + '"properties":null}', 207),
     _br("number-in-properties", _ONE + '"properties":[5]}', 207),
+    _br("boolean-in-properties", _ONE + '"properties":[true]}', 207),
+    _br("number-in-with-history", _ONE + '"propertiesWithHistory":[5]}', 207),
+    _br("boolean-in-with-history", _ONE + '"propertiesWithHistory":[true]}', 207),
 ]
 # fmt: on
 
@@ -1293,7 +1332,7 @@ _BATCH_BODY_ROWS = [
 def test_hubspot_batch_read_refuses_a_body_real_cannot_read(
     client, admin_h, raw, want, object_type, authed
 ):
-    """`_refuse_a_batch_read_shape`'s rule, one body per row: the status and body real answered,
+    """The measurements cited in _refuse_a_batch_read_shape pin the status and body,
     including which member it names when two are wrong, and the status for a null member or a
     number in `properties`, which real reads (a 207 here because no company has id `1`)."""
     headers = {"Content-Type": "application/json", **(admin_h if authed else {})}
@@ -1305,122 +1344,71 @@ def test_hubspot_batch_read_refuses_a_body_real_cannot_read(
         assert r.status_code == want
 
 
-def _batch_required_id(column: int) -> dict:
-    return {
-        "status": "error",
-        "message": f"Invalid input JSON on line 1, column {column}. "
-        "Some required fields were not set: [id]",
-        "category": "VALIDATION_ERROR",
-    }
-
-
-# These bodies pin `_refuse_a_batch_read_shape`'s recorded responses. The synthetic
-# twelve-digit contact id preserves their byte columns without using a real record.
-_ELEMENT_ONE = '{"inputs":[{"id":"123456789012"}],'
-_OBJECT_ELEMENT = (
-    "Cannot deserialize value of type  from Object value (token `JsonToken.START_OBJECT`)"
+@pytest.mark.parametrize(
+    "raw_id, echoed",
+    [
+        ("true", "true"),
+        ("false", "false"),
+        ("1e3", "1e3"),
+        ("1E3", "1E3"),
+        ("1e7", "1e7"),
+        ("1.0", "1.0"),
+        ("-1", "-1"),
+        ("-0.0", "-0.0"),
+        ("99999999999999999999", "99999999999999999999"),
+        ('"missing-id"', "missing-id"),
+        (r'"missing\u002did"', "missing-id"),
+        (r'"missing\"\\id"', 'missing"\\id'),
+    ],
 )
-
-# fmt: off
-_BATCH_ELEMENT_ROWS = [
-    pytest.param(_ELEMENT_ONE + '"properties":[null]}', _batch_refusal(54, "properties element"), id="properties-null"),
-    pytest.param(_ELEMENT_ONE + '"properties":[{}]}', _batch_refusal(49, _OBJECT_ELEMENT), id="properties-object"),
-    pytest.param(_ELEMENT_ONE + '"properties":[[]]}', _batch_refusal(49, _ARRAY), id="properties-array"),
-    pytest.param(_ELEMENT_ONE + '"properties":["email",null,"firstname"]}', _batch_refusal(74, "properties element"), id="properties-null-between-strings"),
-    pytest.param(_ELEMENT_ONE + '"propertiesWithHistory":[null]}', _batch_refusal(65, "propertiesWithHistory element"), id="history-null"),
-    pytest.param(_ELEMENT_ONE + '"propertiesWithHistory":[{}]}', _batch_refusal(60, _OBJECT_ELEMENT), id="history-object"),
-    pytest.param(_ELEMENT_ONE + '"propertiesWithHistory":[[]]}', _batch_refusal(60, _ARRAY), id="history-array"),
-    pytest.param('{"inputs":[{"id":null}]}', _batch_required_id(22), id="null-id"),
-    pytest.param('{"inputs":[{}]}', _batch_required_id(13), id="missing-id"),
-    pytest.param('{"inputs":[{"id":{}}]}', _batch_refusal(18, _OBJECT_ELEMENT), id="object-id"),
-    pytest.param('{"inputs":[{"id":[]}]}', _batch_refusal(18, _ARRAY), id="empty-array-id"),
-    pytest.param('{"inputs":[{"id":["123456789012"]}]}', _batch_refusal(18, _ARRAY), id="array-id"),
-    pytest.param('{"properties":[null],"inputs":"x"}', _batch_refusal(31, _not_a_list("String", "VALUE_STRING")), id="null-property-waits-for-body"),
-    pytest.param('{"inputs":[{},7]}', _batch_required_id(13), id="missing-id-before-integer"),
-    pytest.param('{"inputs":[7,{}]}', _batch_refusal(12, _no_creator("int/Int", "Number value (7)")), id="integer-before-missing-id"),
-]
-# fmt: on
-
-
-@pytest.mark.parametrize("raw,want", _BATCH_ELEMENT_ROWS)
-def test_hubspot_batch_read_measured_element_refusals(client, admin_h, raw, want):
-    """Pin the reported status, byte columns and colon/period distinction, not new precedence."""
-    r = client.post(
-        "/hubspot/crm/v3/objects/contacts/batch/read",
-        headers={**admin_h, "Content-Type": "application/json"},
-        content=raw.encode(),
-    )
-    assert (r.status_code, r.json()) == (400, want)
-
-
-@pytest.mark.parametrize("literal", ["true", "false", "1e3", "1e7", "99999999999999999999", "-0.0"])
-def test_hubspot_batch_read_measured_scalar_id_spelling(client, admin_h, literal):
-    """The same measurement reports lexical ID echoes, not Python bool/float spellings.
-
-    Keep Backlot's current context.id key: the vendor's context.ids key is a separate issue.
+def test_hubspot_batch_read_names_a_missing_id_as_the_body_spells_it(
+    client, admin_h, raw_id, echoed
+):
+    """The measurements cited in batch_read name number and boolean ids as spelled.
+    The escaped strings also preserve decoded lookup locally.
+    Keep Backlot's `context.id`; the vendor's `context.ids` is a separate issue.
     """
     r = client.post(
         "/hubspot/crm/v3/objects/contacts/batch/read",
         headers={**admin_h, "Content-Type": "application/json"},
-        content=('{"inputs":[{"id":' + literal + "}]}").encode(),
-    )
-    assert r.status_code == 207
-    j = r.json()
-    assert j["status"] == "COMPLETE"
-    assert j["results"] == []
-    assert j["numErrors"] == 1
-    assert j["errors"][0]["category"] == "OBJECT_NOT_FOUND"
-    assert j["errors"][0]["context"] == {"id": [literal]}
-
-
-@pytest.mark.parametrize("field", ["properties", "propertiesWithHistory"])
-@pytest.mark.parametrize("literal", ["5", "true"])
-def test_hubspot_batch_read_measured_scalar_properties_stay_accepted(
-    client, admin_h, field, literal
-):
-    """The reported number/boolean list elements are accepted; do not widen the refusal."""
-    listed = client.get("/hubspot/crm/v3/objects/contacts", headers=admin_h).json()["results"]
-    rid = listed[0]["id"]
-    raw = '{"inputs":[{"id":' + json.dumps(rid) + '}],"' + field + '":[' + literal + "]}"
-    r = client.post(
-        "/hubspot/crm/v3/objects/contacts/batch/read",
-        headers={**admin_h, "Content-Type": "application/json"},
-        content=raw.encode(),
-    )
-    assert r.status_code == 200
-    assert [record["id"] for record in r.json()["results"]] == [rid]
-
-
-@pytest.mark.parametrize(
-    "raw_id,decoded",
-    [
-        (r'"missing\u002did"', "missing-id"),
-        (r'"missing\"\\id"', 'missing"\\id'),
-    ],
-    ids=["unicode-escape", "quote-and-backslash"],
-)
-def test_hubspot_batch_read_string_id_decoding_regression(client, admin_h, raw_id, decoded):
-    """Preservation invariant, not a new vendor measurement: strings still use decoded values."""
-    r = client.post(
-        "/hubspot/crm/v3/objects/contacts/batch/read",
-        headers={**admin_h, "Content-Type": "application/json"},
         content=('{"inputs":[{"id":' + raw_id + "}]}").encode(),
     )
     assert r.status_code == 207
-    assert r.json()["errors"][0]["context"] == {"id": [decoded]}
+    j = r.json()
+    assert (j["status"], j["results"], j["numErrors"]) == ("COMPLETE", [], 1)
+    assert j["errors"][0]["category"] == "OBJECT_NOT_FOUND"
+    assert j["errors"][0]["context"] == {"id": [echoed]}
 
 
-@pytest.mark.parametrize("spelling", ["integer", "escaped-string"])
-def test_hubspot_batch_read_existing_synthetic_id_still_resolves(client, admin_h, spelling):
-    """Preserve numeric-record resolution reported above, plus decoded-string lookup locally."""
+@pytest.mark.parametrize(
+    "spelling, field, literal",
+    [
+        ("integer", None, None),
+        ("escaped-string", None, None),
+        ("escaped-string", "properties", "5"),
+        ("escaped-string", "properties", "true"),
+        ("escaped-string", "propertiesWithHistory", "5"),
+        ("escaped-string", "propertiesWithHistory", "true"),
+    ],
+)
+def test_hubspot_batch_read_existing_synthetic_id_still_resolves(
+    client, admin_h, spelling, field, literal
+):
+    """Preserve reported numeric resolution and local decoded-string lookup, including the
+    original successful-record checks for accepted number/boolean property-list elements.
+    """
     listed = client.get("/hubspot/crm/v3/objects/contacts", headers=admin_h).json()["results"]
     rid = listed[0]["id"]
     assert rid.isascii() and rid.isdigit()
     raw_id = rid if spelling == "integer" else '"' + "".join(f"\\u{ord(c):04x}" for c in rid) + '"'
+    raw = '{"inputs":[{"id":' + raw_id + "}]"
+    if field is not None:
+        raw += ',"' + field + '":[' + literal + "]"
+    raw += "}"
     r = client.post(
         "/hubspot/crm/v3/objects/contacts/batch/read",
         headers={**admin_h, "Content-Type": "application/json"},
-        content=('{"inputs":[{"id":' + raw_id + "}]}").encode(),
+        content=raw.encode(),
     )
     assert r.status_code == 200
     assert [record["id"] for record in r.json()["results"]] == [rid]
@@ -1487,6 +1475,18 @@ _TOKEN_ROWS = [
     _nt("a-null-input-ahead", "batch/read", '{"inputs":[null],"properties":NaN}', _token_refusal(34, "NaN")),
     _nt("a-null-input-and-an-unknown-member", "batch/read", '{"inputs":[null],"bogus":NaN}', _token_refusal(29, "NaN")),
     _nt("a-null-input-and-an-id", "batch/read", '{"inputs":[null,{"id":NaN}]}', _token_refusal(26, "NaN")),
+    # The replay cited in _refuse_a_batch_read_shape also exercises each `before` boundary.
+    _nt("a-null-id-ahead", "batch/read", '{"inputs":[{"id":null}],"x":NaN}', _no_id(22)),
+    _nt("a-null-id-behind", "batch/read", '{"x":NaN,"inputs":[{"id":null}]}', _token_refusal(9, "NaN")),
+    _nt("the-token-before-a-null-ids-input-closes", "batch/read", '{"inputs":[{"id":null,"x":NaN}]}', _token_refusal(30, "NaN")),
+    _nt("an-object-id-ahead", "batch/read", '{"inputs":[{"id":{}}],"x":NaN}', _batch_refusal(18, _OBJECT)),
+    _nt("an-object-id-behind", "batch/read", '{"x":NaN,"inputs":[{"id":{}}]}', _token_refusal(9, "NaN")),
+    _nt("an-object-id-around-it", "batch/read", '{"inputs":[{"id":{"a":NaN}}]}', _batch_refusal(18, _OBJECT)),
+    _nt("an-object-element-behind", "batch/read", '{"x":NaN,"inputs":[{"id":"1"}],"properties":[{}]}', _token_refusal(9, "NaN")),
+    _nt("a-null-element-ahead", "batch/read", '{"inputs":[{"id":"1"}],"properties":[null],"x":NaN}', _token_refusal(51, "NaN")),
+    # Local companions for the same input-close boundary when the id is absent.
+    _nt("a-missing-id-ahead", "batch/read", '{"inputs":[{}],"x":NaN}', _no_id(13)),
+    _nt("a-missing-id-behind", "batch/read", '{"x":NaN,"inputs":[{}]}', _token_refusal(9, "NaN")),
     _nt("operator-ahead", "search", "{" + _AN_OPERATOR % '"BOGUS"' + ',"limit":NaN}', _enum_refusal(1, 64)),
     _nt("operator-behind", "search", '{"limit":NaN,' + _AN_OPERATOR % '"BOGUS"' + "}", _token_refusal(13, "NaN")),
     _nt("operator-ahead-in-its-filter", "search", '{"filterGroups":[{"filters":[{"propertyName":"name","operator":"BOGUS","value":NaN}]}]}', _enum_refusal(1, 64)),
