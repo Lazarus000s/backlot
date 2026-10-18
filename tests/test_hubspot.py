@@ -1305,6 +1305,127 @@ def test_hubspot_batch_read_refuses_a_body_real_cannot_read(
         assert r.status_code == want
 
 
+def _batch_required_id(column: int) -> dict:
+    return {
+        "status": "error",
+        "message": f"Invalid input JSON on line 1, column {column}. "
+        "Some required fields were not set: [id]",
+        "category": "VALIDATION_ERROR",
+    }
+
+
+# These bodies pin `_refuse_a_batch_read_shape`'s recorded responses. The synthetic
+# twelve-digit contact id preserves their byte columns without using a real record.
+_ELEMENT_ONE = '{"inputs":[{"id":"123456789012"}],'
+_OBJECT_ELEMENT = (
+    "Cannot deserialize value of type  from Object value (token `JsonToken.START_OBJECT`)"
+)
+
+# fmt: off
+_BATCH_ELEMENT_ROWS = [
+    pytest.param(_ELEMENT_ONE + '"properties":[null]}', _batch_refusal(54, "properties element"), id="properties-null"),
+    pytest.param(_ELEMENT_ONE + '"properties":[{}]}', _batch_refusal(49, _OBJECT_ELEMENT), id="properties-object"),
+    pytest.param(_ELEMENT_ONE + '"properties":[[]]}', _batch_refusal(49, _ARRAY), id="properties-array"),
+    pytest.param(_ELEMENT_ONE + '"properties":["email",null,"firstname"]}', _batch_refusal(74, "properties element"), id="properties-null-between-strings"),
+    pytest.param(_ELEMENT_ONE + '"propertiesWithHistory":[null]}', _batch_refusal(65, "propertiesWithHistory element"), id="history-null"),
+    pytest.param(_ELEMENT_ONE + '"propertiesWithHistory":[{}]}', _batch_refusal(60, _OBJECT_ELEMENT), id="history-object"),
+    pytest.param(_ELEMENT_ONE + '"propertiesWithHistory":[[]]}', _batch_refusal(60, _ARRAY), id="history-array"),
+    pytest.param('{"inputs":[{"id":null}]}', _batch_required_id(22), id="null-id"),
+    pytest.param('{"inputs":[{}]}', _batch_required_id(13), id="missing-id"),
+    pytest.param('{"inputs":[{"id":{}}]}', _batch_refusal(18, _OBJECT_ELEMENT), id="object-id"),
+    pytest.param('{"inputs":[{"id":[]}]}', _batch_refusal(18, _ARRAY), id="empty-array-id"),
+    pytest.param('{"inputs":[{"id":["123456789012"]}]}', _batch_refusal(18, _ARRAY), id="array-id"),
+    pytest.param('{"properties":[null],"inputs":"x"}', _batch_refusal(31, _not_a_list("String", "VALUE_STRING")), id="null-property-waits-for-body"),
+    pytest.param('{"inputs":[{},7]}', _batch_required_id(13), id="missing-id-before-integer"),
+    pytest.param('{"inputs":[7,{}]}', _batch_refusal(12, _no_creator("int/Int", "Number value (7)")), id="integer-before-missing-id"),
+]
+# fmt: on
+
+
+@pytest.mark.parametrize("raw,want", _BATCH_ELEMENT_ROWS)
+def test_hubspot_batch_read_measured_element_refusals(client, admin_h, raw, want):
+    """Pin the reported status, byte columns and colon/period distinction, not new precedence."""
+    r = client.post(
+        "/hubspot/crm/v3/objects/contacts/batch/read",
+        headers={**admin_h, "Content-Type": "application/json"},
+        content=raw.encode(),
+    )
+    assert (r.status_code, r.json()) == (400, want)
+
+
+@pytest.mark.parametrize("literal", ["true", "false", "1e3", "1e7", "99999999999999999999", "-0.0"])
+def test_hubspot_batch_read_measured_scalar_id_spelling(client, admin_h, literal):
+    """The same measurement reports lexical ID echoes, not Python bool/float spellings.
+
+    Keep Backlot's current context.id key: the vendor's context.ids key is a separate issue.
+    """
+    r = client.post(
+        "/hubspot/crm/v3/objects/contacts/batch/read",
+        headers={**admin_h, "Content-Type": "application/json"},
+        content=('{"inputs":[{"id":' + literal + "}]}").encode(),
+    )
+    assert r.status_code == 207
+    j = r.json()
+    assert j["status"] == "COMPLETE"
+    assert j["results"] == []
+    assert j["numErrors"] == 1
+    assert j["errors"][0]["category"] == "OBJECT_NOT_FOUND"
+    assert j["errors"][0]["context"] == {"id": [literal]}
+
+
+@pytest.mark.parametrize("field", ["properties", "propertiesWithHistory"])
+@pytest.mark.parametrize("literal", ["5", "true"])
+def test_hubspot_batch_read_measured_scalar_properties_stay_accepted(
+    client, admin_h, field, literal
+):
+    """The reported number/boolean list elements are accepted; do not widen the refusal."""
+    listed = client.get("/hubspot/crm/v3/objects/contacts", headers=admin_h).json()["results"]
+    rid = listed[0]["id"]
+    raw = '{"inputs":[{"id":' + json.dumps(rid) + '}],"' + field + '":[' + literal + "]}"
+    r = client.post(
+        "/hubspot/crm/v3/objects/contacts/batch/read",
+        headers={**admin_h, "Content-Type": "application/json"},
+        content=raw.encode(),
+    )
+    assert r.status_code == 200
+    assert [record["id"] for record in r.json()["results"]] == [rid]
+
+
+@pytest.mark.parametrize(
+    "raw_id,decoded",
+    [
+        (r'"missing\u002did"', "missing-id"),
+        (r'"missing\"\\id"', 'missing"\\id'),
+    ],
+    ids=["unicode-escape", "quote-and-backslash"],
+)
+def test_hubspot_batch_read_string_id_decoding_regression(client, admin_h, raw_id, decoded):
+    """Preservation invariant, not a new vendor measurement: strings still use decoded values."""
+    r = client.post(
+        "/hubspot/crm/v3/objects/contacts/batch/read",
+        headers={**admin_h, "Content-Type": "application/json"},
+        content=('{"inputs":[{"id":' + raw_id + "}]}").encode(),
+    )
+    assert r.status_code == 207
+    assert r.json()["errors"][0]["context"] == {"id": [decoded]}
+
+
+@pytest.mark.parametrize("spelling", ["integer", "escaped-string"])
+def test_hubspot_batch_read_existing_synthetic_id_still_resolves(client, admin_h, spelling):
+    """Preserve numeric-record resolution reported above, plus decoded-string lookup locally."""
+    listed = client.get("/hubspot/crm/v3/objects/contacts", headers=admin_h).json()["results"]
+    rid = listed[0]["id"]
+    assert rid.isascii() and rid.isdigit()
+    raw_id = rid if spelling == "integer" else '"' + "".join(f"\\u{ord(c):04x}" for c in rid) + '"'
+    r = client.post(
+        "/hubspot/crm/v3/objects/contacts/batch/read",
+        headers={**admin_h, "Content-Type": "application/json"},
+        content=('{"inputs":[{"id":' + raw_id + "}]}").encode(),
+    )
+    assert r.status_code == 200
+    assert [record["id"] for record in r.json()["results"]] == [rid]
+
+
 def _token_refusal(column: int, token: str, line: int = 1) -> dict:
     return {
         "status": "error",
