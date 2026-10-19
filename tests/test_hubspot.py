@@ -1293,7 +1293,6 @@ _BATCH_BODY_ROWS = [
     _br("properties-integer", _ONE + '"properties":5}', _batch_refusal(37, _not_a_list("Integer", "VALUE_NUMBER_INT"))),
     _br("properties-object", _ONE + '"properties":{}}', _batch_refusal(37, _not_a_list("Object", "START_OBJECT"))),
     _br("properties-false", _ONE + '"properties":false}', _batch_refusal(37, _not_a_list("Boolean", "VALUE_FALSE"))),
-    # The measurements cited in _refuse_a_batch_read_shape, using id "1".
     _br("properties-null-element", _ONE + '"properties":[null]}', _batch_refusal(43, "properties element")),
     _br("properties-null-element-then-spaces", _ONE + '"properties":[null]}   ', _batch_refusal(43, "properties element")),
     _br("properties-null-between-strings", _ONE + '"properties":["email",null,"firstname"]}', _batch_refusal(63, "properties element")),
@@ -1332,9 +1331,10 @@ _BATCH_BODY_ROWS = [
 def test_hubspot_batch_read_refuses_a_body_real_cannot_read(
     client, admin_h, raw, want, object_type, authed
 ):
-    """The measurements cited in _refuse_a_batch_read_shape pin the status and body,
-    including which member it names when two are wrong, and the status for a null member or a
-    number in `properties`, which real reads (a 207 here because no company has id `1`)."""
+    """`_refuse_a_batch_read_shape`'s rule, one body per row: the status and body real answered,
+    including which member it names when two are wrong, and the status for a null member, or a
+    number or boolean in either properties list, which real reads (a 207 here because no company
+    has id `1`)."""
     headers = {"Content-Type": "application/json", **(admin_h if authed else {})}
     url = f"/hubspot/crm/v3/objects/{object_type}/batch/read"
     r = client.post(url, headers=headers, content=raw.encode())
@@ -1364,10 +1364,9 @@ def test_hubspot_batch_read_refuses_a_body_real_cannot_read(
 def test_hubspot_batch_read_names_a_missing_id_as_the_body_spells_it(
     client, admin_h, raw_id, echoed
 ):
-    """The measurements cited in batch_read name number and boolean ids as spelled.
-    The escaped strings also preserve decoded lookup locally.
-    Keep Backlot's `context.id`; the vendor's `context.ids` is a separate issue.
-    """
+    """An input naming no record is the 207's one error, its id a number or boolean as the body
+    spells it and a string as it decodes. Backlot names the member `context.id` where real's is
+    `context.ids`."""
     r = client.post(
         "/hubspot/crm/v3/objects/contacts/batch/read",
         headers={**admin_h, "Content-Type": "application/json"},
@@ -1391,12 +1390,11 @@ def test_hubspot_batch_read_names_a_missing_id_as_the_body_spells_it(
         ("escaped-string", "propertiesWithHistory", "true"),
     ],
 )
-def test_hubspot_batch_read_existing_synthetic_id_still_resolves(
+def test_hubspot_batch_read_finds_a_record_by_an_integer_or_an_escaped_id(
     client, admin_h, spelling, field, literal
 ):
-    """Preserve reported numeric resolution and local decoded-string lookup, including the
-    original successful-record checks for accepted number/boolean property-list elements.
-    """
+    """A record's id sent as a JSON integer, or as a string of `\\u` escapes, finds the record
+    as real's does, the escaped one also beside a `5` or a `true` in either properties list."""
     listed = client.get("/hubspot/crm/v3/objects/contacts", headers=admin_h).json()["results"]
     rid = listed[0]["id"]
     assert rid.isascii() and rid.isdigit()
@@ -1475,7 +1473,6 @@ _TOKEN_ROWS = [
     _nt("a-null-input-ahead", "batch/read", '{"inputs":[null],"properties":NaN}', _token_refusal(34, "NaN")),
     _nt("a-null-input-and-an-unknown-member", "batch/read", '{"inputs":[null],"bogus":NaN}', _token_refusal(29, "NaN")),
     _nt("a-null-input-and-an-id", "batch/read", '{"inputs":[null,{"id":NaN}]}', _token_refusal(26, "NaN")),
-    # The replay cited in _refuse_a_batch_read_shape also exercises each `before` boundary.
     _nt("a-null-id-ahead", "batch/read", '{"inputs":[{"id":null}],"x":NaN}', _no_id(22)),
     _nt("a-null-id-behind", "batch/read", '{"x":NaN,"inputs":[{"id":null}]}', _token_refusal(9, "NaN")),
     _nt("the-token-before-a-null-ids-input-closes", "batch/read", '{"inputs":[{"id":null,"x":NaN}]}', _token_refusal(30, "NaN")),
@@ -1484,7 +1481,6 @@ _TOKEN_ROWS = [
     _nt("an-object-id-around-it", "batch/read", '{"inputs":[{"id":{"a":NaN}}]}', _batch_refusal(18, _OBJECT)),
     _nt("an-object-element-behind", "batch/read", '{"x":NaN,"inputs":[{"id":"1"}],"properties":[{}]}', _token_refusal(9, "NaN")),
     _nt("a-null-element-ahead", "batch/read", '{"inputs":[{"id":"1"}],"properties":[null],"x":NaN}', _token_refusal(51, "NaN")),
-    # Local companions for the same input-close boundary when the id is absent.
     _nt("a-missing-id-ahead", "batch/read", '{"inputs":[{}],"x":NaN}', _no_id(13)),
     _nt("a-missing-id-behind", "batch/read", '{"x":NaN,"inputs":[{}]}', _token_refusal(9, "NaN")),
     _nt("operator-ahead", "search", "{" + _AN_OPERATOR % '"BOGUS"' + ',"limit":NaN}', _enum_refusal(1, 64)),

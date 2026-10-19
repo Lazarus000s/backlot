@@ -848,8 +848,8 @@ def _refuse_a_batch_read_shape(
     element of `inputs`, are deferred until after the other value refusals. Then `properties`
     is named first, followed by `propertiesWithHistory`, then a null input, whatever their order
     in the body (measured 2026-10-18). A properties element is named at the body's closing brace;
-    a null input's envelope has no `category`. With a `before` from `_non_standard_number`, a refusal from
-    there on and the deferred null elements are left to the token."""
+    a null input's envelope has no `category`. With a `before` from `_non_standard_number`, a
+    refusal from there on and the deferred null elements are left to the token."""
     null_input = False
     null_properties = set()
     for key, value in body.items():
